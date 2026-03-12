@@ -7,6 +7,11 @@ MotoronI2C mc(0x11);
 // MOTOR + ENCODER SETUP
 // ======================================================
 
+float happyTarget = 25.0;
+int happyDirection = 1;   // 1 means heading toward +45, -1 means heading toward -45
+bool motor1Returning = false;
+bool motor2Returning = false;
+
 const long countsPerRevolution = 144;   // measured experimentally
 
 struct Motor
@@ -17,17 +22,32 @@ struct Motor
   volatile long count;      // Encoder count
 };
 
+typedef enum {
+    HAPPY, SAD, ANGRY, SCARED, NEUTRAL
+} Emotions;
+
+Emotions emotion = HAPPY;
+
 // Motor 1 uses encoder pins D2 and D4
-Motor motor1 = {1, 2, 4, 0};
+Motor motor1 = {1, 2, 3, 0};
 Motor motor2 = {2, 12, 13, 0};
 
 // Interrupt handler for motor 1 encoder
 void handleEncA1()
 {
   if (digitalRead(motor1.encB) == HIGH)
-    motor1.count++;
-  else
     motor1.count--;
+  else
+    motor1.count++;
+}
+
+// Interrupt handler for motor 2 encoder
+void handleEncA2()
+{
+  if (digitalRead(motor2.encB) == HIGH)
+    motor2.count--;
+  else
+    motor2.count++;
 }
 
 // Rotate one motor by a given number of degrees
@@ -40,9 +60,13 @@ void rotateMotor(Motor &m, int direction, float degrees)
   interrupts();
 
   long targetCounts = (abs(degrees) / 360.0) * countsPerRevolution;
-  int speed = 300 * direction;
 
-  mc.setSpeed(m.motorID, speed);
+  // 1. Kick-start motor
+  mc.setSpeed(m.motorID, 600 * direction);
+  // delay(100);   // adjust: 20–100 ms depending on motor
+
+  // // 2. Run at slower speed for accuracy
+  // mc.setSpeed(m.motorID, 300 * direction);
 
   while (true)
   {
@@ -51,11 +75,62 @@ void rotateMotor(Motor &m, int direction, float degrees)
     currentCount = m.count;
     interrupts();
 
-    if (abs(currentCount - startCount) >= targetCounts)
+    long moved = abs(currentCount - startCount);
+
+    if (moved >= targetCounts)
       break;
   }
 
   mc.setSpeed(m.motorID, 0);
+}
+
+void returnToNeutral(Motor &m, bool &returningToNeutral)
+{
+  long count;
+  noInterrupts();
+  count = m.count;
+  interrupts();
+  int tolerance = 10;
+
+  float angleDeg = (count * 360.0) / countsPerRevolution;
+
+  float error = 0 - angleDeg;
+
+  if (abs(error) < tolerance)
+  {
+    mc.setSpeed(m.motorID, 0);
+    returningToNeutral = false;   // finished
+    return;
+  }
+
+  int speed = (abs(error) > 10) ? 600 : 300;
+
+  if (error > 0)
+    mc.setSpeed(m.motorID, speed);
+  else
+    mc.setSpeed(m.motorID, -speed);
+}
+
+void bobMotor(Motor &m)
+{
+  long count;
+  noInterrupts();
+  count = m.count;
+  interrupts();
+
+  float angleDeg = (count * 360.0) / countsPerRevolution;
+
+  if (angleDeg >= 25.0)
+    happyTarget = -25.0;
+  else if (angleDeg <= -25.0)
+    happyTarget = 25.0;
+
+  float error = happyTarget - angleDeg;
+
+  if (error > 0)
+    mc.setSpeed(m.motorID, 600);
+  else
+    mc.setSpeed(m.motorID, -600);
 }
 
 // ======================================================
@@ -158,6 +233,12 @@ float calibrateDistance(float raw)
 }
 
 // ======================================================
+// LIGHT SENSOR SETUP
+// ======================================================
+int lightSensorValue = 0; // variable for raw sensor readings
+const int lightPin = A0;
+
+// ======================================================
 // SETUP
 // ======================================================
 
@@ -173,11 +254,18 @@ void setup()
   mc.setMaxAcceleration(1, 200);
   mc.setMaxDeceleration(1, 300);
 
+  mc.setMaxAcceleration(2, 200);
+  mc.setMaxDeceleration(2, 300);
+
   mc.disableCommandTimeout();
 
   pinMode(motor1.encA, INPUT_PULLUP);
   pinMode(motor1.encB, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(motor1.encA), handleEncA1, RISING);
+
+  pinMode(motor2.encA, INPUT_PULLUP);
+  pinMode(motor2.encB, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(motor2.encA), handleEncA2, RISING);
 
   pinMode(sensorPin, INPUT);
 
@@ -197,14 +285,16 @@ void loop()
   int medianRaw = readMedianDistance();
   float corrected = -1;
 
+  int sensorValue = analogRead(lightPin);
+
   if (medianRaw >= 0)
   {
     int smoothRaw = movingAverage(medianRaw);
     corrected = calibrateDistance((float)smoothRaw);
 
-    Serial.print("Distance: ");
-    Serial.print(corrected);
-    Serial.println(" mm");
+    // Serial.print("Distance: ");
+    // Serial.print(corrected);
+    // Serial.println(" mm");
   }
   else
   {
@@ -215,27 +305,38 @@ void loop()
   // Motor behavior based on distance
   // ------------------------------
   if (corrected > 600 || corrected == -1) {
-    mc.setSpeed(1, 0);
-    mc.setSpeed(2, 800);
+    emotion = HAPPY;
   } else {
-    mc.setSpeed(1, 800);
-    mc.setSpeed(2, 0);
+    emotion = SCARED;
   }
 
-  // ------------------------------
-  // Encoder angle reading
-  // ------------------------------
-  long count;
-  noInterrupts();
-  count = motor1.count;
-  interrupts();
+  Serial.println(emotion);
 
-  float angleDeg = (count * 360.0) / countsPerRevolution;
+  if (emotion == HAPPY)
+  {
+    bobMotor(motor2);
+    motor2Returning = true;   // remember that we left center
+  }
+  else
+  {
+    if (motor2Returning)
+      returnToNeutral(motor2, motor2Returning);
+    else
+      mc.setSpeed(motor2.motorID, 0);
+  }
 
-  Serial.print("Count: ");
-  Serial.print(count);
-  Serial.print("   Angle (deg): ");
-  Serial.println(angleDeg);
+  if (emotion == SCARED)
+  {
+    bobMotor(motor1);
+    motor1Returning = true;   // remember that we left center
+  }
+  else
+  {
+    if (motor1Returning)
+      returnToNeutral(motor1, motor1Returning);
+    else
+      mc.setSpeed(motor1.motorID, 0);
+  }
 
   delay(50);
 }
