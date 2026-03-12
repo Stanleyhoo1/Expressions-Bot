@@ -1,0 +1,342 @@
+#include <Wire.h>
+#include <Motoron.h>
+
+MotoronI2C mc(0x11);
+
+// ======================================================
+// MOTOR + ENCODER SETUP
+// ======================================================
+
+float happyTarget = 25.0;
+int happyDirection = 1;   // 1 means heading toward +45, -1 means heading toward -45
+bool motor1Returning = false;
+bool motor2Returning = false;
+
+const long countsPerRevolution = 144;   // measured experimentally
+
+struct Motor
+{
+  int motorID;              // Motoron motor number: 1, 2, or 3
+  int encA;                 // Encoder channel A pin
+  int encB;                 // Encoder channel B pin
+  volatile long count;      // Encoder count
+};
+
+typedef enum {
+    HAPPY, SAD, ANGRY, SCARED, NEUTRAL
+} Emotions;
+
+Emotions emotion = HAPPY;
+
+// Motor 1 uses encoder pins D2 and D4
+Motor motor1 = {1, 2, 3, 0};
+Motor motor2 = {2, 12, 13, 0};
+
+// Interrupt handler for motor 1 encoder
+void handleEncA1()
+{
+  if (digitalRead(motor1.encB) == HIGH)
+    motor1.count--;
+  else
+    motor1.count++;
+}
+
+// Interrupt handler for motor 2 encoder
+void handleEncA2()
+{
+  if (digitalRead(motor2.encB) == HIGH)
+    motor2.count--;
+  else
+    motor2.count++;
+}
+
+// Rotate one motor by a given number of degrees
+// direction = 1 for one direction, -1 for the other
+void rotateMotor(Motor &m, int direction, float degrees)
+{
+  long startCount;
+  noInterrupts();
+  startCount = m.count;
+  interrupts();
+
+  long targetCounts = (abs(degrees) / 360.0) * countsPerRevolution;
+
+  // 1. Kick-start motor
+  mc.setSpeed(m.motorID, 600 * direction);
+  // delay(100);   // adjust: 20–100 ms depending on motor
+
+  // // 2. Run at slower speed for accuracy
+  // mc.setSpeed(m.motorID, 300 * direction);
+
+  while (true)
+  {
+    long currentCount;
+    noInterrupts();
+    currentCount = m.count;
+    interrupts();
+
+    long moved = abs(currentCount - startCount);
+
+    if (moved >= targetCounts)
+      break;
+  }
+
+  mc.setSpeed(m.motorID, 0);
+}
+
+void returnToNeutral(Motor &m, bool &returningToNeutral)
+{
+  long count;
+  noInterrupts();
+  count = m.count;
+  interrupts();
+  int tolerance = 10;
+
+  float angleDeg = (count * 360.0) / countsPerRevolution;
+
+  float error = 0 - angleDeg;
+
+  if (abs(error) < tolerance)
+  {
+    mc.setSpeed(m.motorID, 0);
+    returningToNeutral = false;   // finished
+    return;
+  }
+
+  int speed = (abs(error) > 10) ? 600 : 300;
+
+  if (error > 0)
+    mc.setSpeed(m.motorID, speed);
+  else
+    mc.setSpeed(m.motorID, -speed);
+}
+
+void bobMotor(Motor &m)
+{
+  long count;
+  noInterrupts();
+  count = m.count;
+  interrupts();
+
+  float angleDeg = (count * 360.0) / countsPerRevolution;
+
+  if (angleDeg >= 25.0)
+    happyTarget = -25.0;
+  else if (angleDeg <= -25.0)
+    happyTarget = 25.0;
+
+  float error = happyTarget - angleDeg;
+
+  if (error > 0)
+    mc.setSpeed(m.motorID, 600);
+  else
+    mc.setSpeed(m.motorID, -600);
+}
+
+// ======================================================
+// DISTANCE SENSOR SETUP
+// ======================================================
+
+// Pololu Distance Sensor with Pulse Width Output
+const uint8_t sensorPin = 5;
+
+// Filter settings
+const int MEDIAN_SAMPLES = 7;   // must be odd
+const int AVG_SAMPLES = 5;
+
+int avgBuffer[AVG_SAMPLES];
+int avgIndex = 0;
+bool avgFilled = false;
+
+// Sort helper for median filter
+void sortArray(int arr[], int n)
+{
+  for (int i = 0; i < n - 1; i++)
+  {
+    for (int j = i + 1; j < n; j++)
+    {
+      if (arr[j] < arr[i])
+      {
+        int temp = arr[i];
+        arr[i] = arr[j];
+        arr[j] = temp;
+      }
+    }
+  }
+}
+
+// Raw distance reading from pulse width output
+int readRawDistance()
+{
+  unsigned long t = pulseIn(sensorPin, HIGH, 50000); // 50 ms timeout
+
+  if (t == 0) return -1;        // timeout
+  if (t > 1850) return -1;      // no detection
+
+  int d = (int)(t - 1000) * 4;  // Pololu raw conversion in mm
+  if (d < 0) d = 0;
+
+  return d;
+}
+
+// Median filter
+int readMedianDistance()
+{
+  int readings[MEDIAN_SAMPLES];
+  int validCount = 0;
+
+  for (int i = 0; i < MEDIAN_SAMPLES; i++)
+  {
+    int val = readRawDistance();
+    if (val >= 0)
+      readings[validCount++] = val;
+
+    delay(5);
+  }
+
+  if (validCount == 0) return -1;
+
+  sortArray(readings, validCount);
+  return readings[validCount / 2];
+}
+
+// Moving average filter
+int movingAverage(int newValue)
+{
+  if (newValue < 0) return -1;
+
+  avgBuffer[avgIndex] = newValue;
+  avgIndex++;
+
+  if (avgIndex >= AVG_SAMPLES)
+  {
+    avgIndex = 0;
+    avgFilled = true;
+  }
+
+  int count = avgFilled ? AVG_SAMPLES : avgIndex;
+  long sum = 0;
+
+  for (int i = 0; i < count; i++)
+    sum += avgBuffer[i];
+
+  return sum / count;
+}
+
+// Quadratic calibration
+float calibrateDistance(float raw)
+{
+  float corrected = -0.000023 * raw * raw + 0.5275 * raw + 7.4;
+
+  if (corrected < 0) corrected = 0;
+  return corrected;
+}
+
+// ======================================================
+// LIGHT SENSOR SETUP
+// ======================================================
+int lightSensorValue = 0; // variable for raw sensor readings
+const int lightPin = A0;
+
+// ======================================================
+// SETUP
+// ======================================================
+
+void setup()
+{
+  Wire.begin();
+  Serial.begin(115200);
+
+  mc.reinitialize();
+  mc.disableCrc();
+  mc.clearResetFlag();
+
+  mc.setMaxAcceleration(1, 200);
+  mc.setMaxDeceleration(1, 300);
+
+  mc.setMaxAcceleration(2, 200);
+  mc.setMaxDeceleration(2, 300);
+
+  mc.disableCommandTimeout();
+
+  pinMode(motor1.encA, INPUT_PULLUP);
+  pinMode(motor1.encB, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(motor1.encA), handleEncA1, RISING);
+
+  pinMode(motor2.encA, INPUT_PULLUP);
+  pinMode(motor2.encB, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(motor2.encA), handleEncA2, RISING);
+
+  pinMode(sensorPin, INPUT);
+
+  for (int i = 0; i < AVG_SAMPLES; i++)
+    avgBuffer[i] = 0;
+}
+
+// ======================================================
+// LOOP
+// ======================================================
+
+void loop()
+{
+  // ------------------------------
+  // Distance sensor reading
+  // ------------------------------
+  int medianRaw = readMedianDistance();
+  float corrected = -1;
+
+  int sensorValue = analogRead(lightPin);
+
+  if (medianRaw >= 0)
+  {
+    int smoothRaw = movingAverage(medianRaw);
+    corrected = calibrateDistance((float)smoothRaw);
+
+    // Serial.print("Distance: ");
+    // Serial.print(corrected);
+    // Serial.println(" mm");
+  }
+  else
+  {
+    Serial.println("Distance: no reading");
+  }
+
+  // ------------------------------
+  // Motor behavior based on distance
+  // ------------------------------
+  if (corrected > 600 || corrected == -1) {
+    emotion = HAPPY;
+  } else {
+    emotion = SCARED;
+  }
+
+  Serial.println(emotion);
+
+  if (emotion == HAPPY)
+  {
+    bobMotor(motor2);
+    motor2Returning = true;   // remember that we left center
+  }
+  else
+  {
+    if (motor2Returning)
+      returnToNeutral(motor2, motor2Returning);
+    else
+      mc.setSpeed(motor2.motorID, 0);
+  }
+
+  if (emotion == SCARED)
+  {
+    bobMotor(motor1);
+    motor1Returning = true;   // remember that we left center
+  }
+  else
+  {
+    if (motor1Returning)
+      returnToNeutral(motor1, motor1Returning);
+    else
+      mc.setSpeed(motor1.motorID, 0);
+  }
+
+  delay(50);
+}
