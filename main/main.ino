@@ -1,6 +1,12 @@
 #include <Wire.h>
 #include <Motoron.h>
 
+#define CLOSE_DISTANCE 200      // mm
+#define DARK_THRESHOLD 500      // LDR value
+#define BORED_TIME 30 * 1000    // 30 seconds
+#define SAD_TIME 60*2*1000      // 2 minutes
+#define IMU_SPIKE_THRESHOLD 20  // deg/s or similar
+
 MotoronI2C mc(0x11);
 
 // ======================================================
@@ -21,12 +27,6 @@ struct Motor
   int encB;                 // Encoder channel B pin
   volatile long count;      // Encoder count
 };
-
-typedef enum {
-    HAPPY, SAD, ANGRY, SCARED, NEUTRAL
-} Emotions;
-
-Emotions emotion = HAPPY;
 
 // Motor 1 uses encoder pins D2 and D4
 Motor motor1 = {1, 2, 3, 0};
@@ -239,6 +239,74 @@ int lightSensorValue = 0; // variable for raw sensor readings
 const int lightPin = A0;
 
 // ======================================================
+// EMOTION LOGIC
+// ======================================================
+unsigned long idleStart = 0;
+bool isIdle = false;
+
+enum Emotion{
+    HAPPY, // Default, normal/bright light, moderate distance (more than 200mm away)
+    CURIOUS, // Detects object moderate distance away (200-1000mm)
+    SHY, // Person too close and bright (less than 200mm away)
+    STARTLED, // Dark and too close (less than 200mm away)
+    TIRED, // Dark and idle (30 secs)
+    SLEEPING, // Dark and idle for long period (2 mins)
+    BORED, // No interaction for a period, bright (30 secs)
+    SAD, // Long inactivity, bright (2 mins)
+    ANNOYED // Picked up or moved suddenly (IMU spike)
+};
+
+Emotion determineEmotion(unsigned long idleTime, float distance, int lightSensorValue);
+
+Emotion emotion = HAPPY;
+
+bool isDark(int lightSensorValue){
+  if (lightSensorValue > 500){
+    return true;
+  } else {
+    return false;
+  }
+}
+
+Emotion determineEmotion(unsigned long idleTime, float distance, int lightSensorValue) {
+  bool dark = isDark(lightSensorValue);
+
+    // if (imuSpikeDetected()) {
+    //     return ANNOYED;
+    // }
+
+    if (distance < CLOSE_DISTANCE) {
+        if (dark) {
+            return STARTLED;
+        } else {
+            return SHY;
+        }
+    }
+
+    if (dark && idleTime > SAD_TIME) {
+        return SLEEPING;
+    }
+
+    if (dark && idleTime > BORED_TIME) {
+        return TIRED;
+    }
+
+    if (idleTime > SAD_TIME) {
+        return SAD;
+    }
+
+    if (idleTime > BORED_TIME) {
+        return BORED;
+    }
+
+    if (distance < 1000) {
+        return CURIOUS;
+    }
+
+    return HAPPY; // default
+}
+
+// ======================================================
 // SETUP
 // ======================================================
 
@@ -283,14 +351,14 @@ void loop()
   // Distance sensor reading
   // ------------------------------
   int medianRaw = readMedianDistance();
-  float corrected = -1;
+  float corrected_distance = -1;
 
-  int sensorValue = analogRead(lightPin);
+  lightSensorValue = analogRead(lightPin);
 
   if (medianRaw >= 0)
   {
     int smoothRaw = movingAverage(medianRaw);
-    corrected = calibrateDistance((float)smoothRaw);
+    corrected_distance = calibrateDistance((float)smoothRaw);
 
     // Serial.print("Distance: ");
     // Serial.print(corrected);
@@ -302,13 +370,21 @@ void loop()
   }
 
   // ------------------------------
-  // Motor behavior based on distance
+  // Behavior based on emotion
   // ------------------------------
-  if (corrected > 600 || corrected == -1) {
-    emotion = HAPPY;
+  if (corrected_distance == -1) {
+    if (!isIdle) {
+      idleStart = millis();   // start the clock when idling begins
+      isIdle = true;
+    }
   } else {
-    emotion = SCARED;
+    isIdle = false;
+    idleStart = millis();       // reset when interaction detected
   }
+
+  unsigned long idleTime = isIdle ? (millis() - idleStart) : 0;
+
+  emotion = determineEmotion(idleTime, corrected_distance, lightSensorValue);
 
   Serial.println(emotion);
 
@@ -325,7 +401,7 @@ void loop()
       mc.setSpeed(motor2.motorID, 0);
   }
 
-  if (emotion == SCARED)
+  if (emotion == STARTLED)
   {
     bobMotor(motor1);
     motor1Returning = true;   // remember that we left center
