@@ -262,11 +262,18 @@ enum Emotion{
 };
 
 Emotion determineEmotion(unsigned long idleTime, float distance, int lightSensorValue);
+void printEmotion(Emotion e);
+
+int consecutiveValidReadings = 0; // distance
+const int VALID_READINGS_THRESHOLD = 3; // require 3 in a row
+
+int consecutiveSpikeReadings = 0; // IMU
+const int SPIKE_THRESHOLD_COUNT = 3;
 
 Emotion emotion = HAPPY;
 
 bool isDark(int lightSensorValue){
-  if (lightSensorValue > 500){
+  if (lightSensorValue < 600){
     return true;
   } else {
     return false;
@@ -280,25 +287,29 @@ bool imuSpikeDetected() {
   float accel_y = imu.a.y * 0.061 / 1000.0;
   float accel_z = imu.a.z * 0.061 / 1000.0;
 
-  // float gyro_x = imu.g.x * 8.75 / 1000.0;
-  // float gyro_y = imu.g.y * 8.75 / 1000.0;
-  // float gyro_z = imu.g.z * 8.75 / 1000.0;
+  bool spiked = false;
 
-  // 3. Check thresholds and print alerts
   if (abs(accel_x) > THRESHOLD_X) {
-    Serial.print("ALERT: X-axis acceleration surpassed threshold! Value: ");
-    Serial.println(accel_x);
+    // Serial.print("ALERT: X-axis acceleration surpassed threshold! Value: ");
+    // Serial.println(accel_x);
+    spiked = true;
+  } else if (abs(accel_y) > THRESHOLD_Y) {
+    // Serial.print("ALERT: Y-axis acceleration surpassed threshold! Value: ");
+    // Serial.println(accel_y);
+    spiked = true;
+  } else if (accel_z < THRESHOLD_Z_LOW) {
+    // Serial.print("ALERT: Z-axis acceleration dropped below threshold! Value: ");
+    // Serial.println(accel_z);
+    spiked = true;
   }
 
-  if (abs(accel_y) > THRESHOLD_Y) {
-    Serial.print("ALERT: Y-axis acceleration surpassed threshold! Value: ");
-    Serial.println(accel_y);
+  if (spiked) {
+    consecutiveSpikeReadings++;
+  } else {
+    consecutiveSpikeReadings = 0;  // reset on any calm reading
   }
 
-  if (accel_z < THRESHOLD_Z_LOW) {
-    Serial.print("ALERT: Z-axis acceleration dropped below threshold! Value: ");
-    Serial.println(accel_z);
-  }
+  return consecutiveSpikeReadings >= SPIKE_THRESHOLD_COUNT;
 }
 
 
@@ -309,7 +320,7 @@ Emotion determineEmotion(unsigned long idleTime, float distance, int lightSensor
         return ANNOYED;
     }
 
-    if (distance < CLOSE_DISTANCE) {
+    if (distance < CLOSE_DISTANCE && distance != -1) {
         if (dark) {
             return STARTLED;
         } else {
@@ -333,11 +344,19 @@ Emotion determineEmotion(unsigned long idleTime, float distance, int lightSensor
         return BORED;
     }
 
-    if (distance < 1000) {
+    if (distance < 1000 && distance != -1) {
         return CURIOUS;
     }
 
     return HAPPY; // default
+}
+
+void printEmotion(Emotion e) {
+  const char* names[] = {
+    "HAPPY", "CURIOUS", "SHY", "STARTLED",
+    "TIRED", "SLEEPING", "BORED", "SAD", "ANNOYED"
+  };
+  Serial.println(names[e]);
 }
 
 // ======================================================
@@ -396,6 +415,10 @@ void loop()
 
   lightSensorValue = analogRead(lightPin);
 
+  // Serial.print("Light Sensor: ");
+  // Serial.println(lightSensorValue);
+
+
   if (medianRaw >= 0)
   {
     int smoothRaw = movingAverage(medianRaw);
@@ -405,29 +428,33 @@ void loop()
     // Serial.print(corrected);
     // Serial.println(" mm");
   }
-  else
-  {
-    Serial.println("Distance: no reading");
-  }
+  // Serial.println(corrected_distance);
 
   // ------------------------------
   // Behavior based on emotion
   // ------------------------------
   if (corrected_distance == -1) {
+    consecutiveValidReadings = 0;  // reset streak on bad reading
     if (!isIdle) {
-      idleStart = millis();   // start the clock when idling begins
+      idleStart = millis();
       isIdle = true;
     }
   } else {
-    isIdle = false;
-    idleStart = millis();       // reset when interaction detected
+    consecutiveValidReadings++;
+    if (consecutiveValidReadings >= VALID_READINGS_THRESHOLD) {
+      isIdle = false;
+      idleStart = millis();  // only reset idle if reading is sustained
+    }
   }
 
   unsigned long idleTime = isIdle ? (millis() - idleStart) : 0;
 
+  Serial.print("Idle time: ");
+  Serial.println(idleTime/1000.0);
+
   emotion = determineEmotion(idleTime, corrected_distance, lightSensorValue);
 
-  Serial.println(emotion);
+  printEmotion(emotion);
 
   if (emotion == HAPPY)
   {
