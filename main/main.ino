@@ -257,11 +257,15 @@ enum Emotion{
 };
 
 Emotion determineEmotion(unsigned long idleTime, float distance, int lightSensorValue);
+void printEmotion(Emotion e);
+
+int consecutiveValidReadings = 0;
+const int VALID_READINGS_THRESHOLD = 3; // require 3 in a row
 
 Emotion emotion = HAPPY;
 
 bool isDark(int lightSensorValue){
-  if (lightSensorValue > 500){
+  if (lightSensorValue < 600){
     return true;
   } else {
     return false;
@@ -275,7 +279,7 @@ Emotion determineEmotion(unsigned long idleTime, float distance, int lightSensor
     //     return ANNOYED;
     // }
 
-    if (distance < CLOSE_DISTANCE) {
+    if (distance < CLOSE_DISTANCE && distance != -1) {
         if (dark) {
             return STARTLED;
         } else {
@@ -299,11 +303,19 @@ Emotion determineEmotion(unsigned long idleTime, float distance, int lightSensor
         return BORED;
     }
 
-    if (distance < 1000) {
+    if (distance < 1000 && distance != -1) {
         return CURIOUS;
     }
 
     return HAPPY; // default
+}
+
+void printEmotion(Emotion e) {
+  const char* names[] = {
+    "HAPPY", "CURIOUS", "SHY", "STARTLED",
+    "TIRED", "SLEEPING", "BORED", "SAD", "ANNOYED"
+  };
+  Serial.println(names[e]);
 }
 
 // ======================================================
@@ -355,6 +367,10 @@ void loop()
 
   lightSensorValue = analogRead(lightPin);
 
+  Serial.print("Light Sensor: ");
+  Serial.println(lightSensorValue);
+
+
   if (medianRaw >= 0)
   {
     int smoothRaw = movingAverage(medianRaw);
@@ -364,29 +380,33 @@ void loop()
     // Serial.print(corrected);
     // Serial.println(" mm");
   }
-  else
-  {
-    Serial.println("Distance: no reading");
-  }
+  Serial.println(corrected_distance);
 
   // ------------------------------
   // Behavior based on emotion
   // ------------------------------
   if (corrected_distance == -1) {
+    consecutiveValidReadings = 0;  // reset streak on bad reading
     if (!isIdle) {
-      idleStart = millis();   // start the clock when idling begins
+      idleStart = millis();
       isIdle = true;
     }
   } else {
-    isIdle = false;
-    idleStart = millis();       // reset when interaction detected
+    consecutiveValidReadings++;
+    if (consecutiveValidReadings >= VALID_READINGS_THRESHOLD) {
+      isIdle = false;
+      idleStart = millis();  // only reset idle if reading is sustained
+    }
   }
 
   unsigned long idleTime = isIdle ? (millis() - idleStart) : 0;
 
+  Serial.print("Idle time: ");
+  Serial.println(idleTime/1000.0);
+
   emotion = determineEmotion(idleTime, corrected_distance, lightSensorValue);
 
-  Serial.println(emotion);
+  printEmotion(emotion);
 
   if (emotion == HAPPY)
   {
