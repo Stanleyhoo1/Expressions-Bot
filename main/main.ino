@@ -1,5 +1,6 @@
 #include <Wire.h>
 #include <Motoron.h>
+#include <LSM6.h>
 
 #define CLOSE_DISTANCE 200      // mm
 #define DARK_THRESHOLD 500      // LDR value
@@ -7,6 +8,7 @@
 #define SAD_TIME 60*2*1000      // 2 minutes
 #define IMU_SPIKE_THRESHOLD 20  // deg/s or similar
 
+LSM6 imu;
 MotoronI2C mc(0x11);
 
 // ======================================================
@@ -17,6 +19,9 @@ float happyTarget = 25.0;
 int happyDirection = 1;   // 1 means heading toward +45, -1 means heading toward -45
 bool motor1Returning = false;
 bool motor2Returning = false;
+const float THRESHOLD_X = 0.3;
+const float THRESHOLD_Y = 0.3;
+const float THRESHOLD_Z_LOW = 0.75;
 
 const long countsPerRevolution = 144;   // measured experimentally
 
@@ -272,12 +277,41 @@ bool isDark(int lightSensorValue){
   }
 }
 
+bool imuSpikeDetected() {
+  imu.read();
+
+  float accel_x = imu.a.x * 0.061 / 1000.0;
+  float accel_y = imu.a.y * 0.061 / 1000.0;
+  float accel_z = imu.a.z * 0.061 / 1000.0;
+
+  // float gyro_x = imu.g.x * 8.75 / 1000.0;
+  // float gyro_y = imu.g.y * 8.75 / 1000.0;
+  // float gyro_z = imu.g.z * 8.75 / 1000.0;
+
+  // 3. Check thresholds and print alerts
+  if (abs(accel_x) > THRESHOLD_X) {
+    Serial.print("ALERT: X-axis acceleration surpassed threshold! Value: ");
+    Serial.println(accel_x);
+  }
+
+  if (abs(accel_y) > THRESHOLD_Y) {
+    Serial.print("ALERT: Y-axis acceleration surpassed threshold! Value: ");
+    Serial.println(accel_y);
+  }
+
+  if (accel_z < THRESHOLD_Z_LOW) {
+    Serial.print("ALERT: Z-axis acceleration dropped below threshold! Value: ");
+    Serial.println(accel_z);
+  }
+}
+
+
 Emotion determineEmotion(unsigned long idleTime, float distance, int lightSensorValue) {
   bool dark = isDark(lightSensorValue);
 
-    // if (imuSpikeDetected()) {
-    //     return ANNOYED;
-    // }
+    if (imuSpikeDetected()) {
+        return ANNOYED;
+    }
 
     if (distance < CLOSE_DISTANCE && distance != -1) {
         if (dark) {
@@ -326,6 +360,13 @@ void setup()
 {
   Wire.begin();
   Serial.begin(115200);
+
+  if (!imu.init()) {
+    Serial.println("Failed to detect and initialize IMU!");
+    while (1);
+  }
+
+  imu.enableDefault();
 
   mc.reinitialize();
   mc.disableCrc();

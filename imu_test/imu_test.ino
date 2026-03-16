@@ -21,6 +21,11 @@ LSM6 imu;
 
 char report[80];
 
+// --- Define Thresholds (in units of 'g') ---
+const float THRESHOLD_X = 0.3;     // Triggers if X goes above 1.5g or below -1.5g
+const float THRESHOLD_Y = 0.3;     // Triggers if Y goes above 1.5g or below -1.5g
+const float THRESHOLD_Z_LOW = 0.75; // Triggers if Z drops below 0.5g (e.g., freefall or tilt)
+
 void setup()
 {
   Serial.begin(9600);
@@ -38,10 +43,36 @@ void loop()
 {
   imu.read();
 
-  snprintf(report, sizeof(report), "A: %6f %6f %6f    G: %6f %6f %6f",
-    imu.a.x* 0.061/1000, imu.a.y* 0.061/1000, imu.a.z* 0.061/1000,
-    imu.g.x*8.75/1000, imu.g.y*8.75/1000, imu.g.z*8.75/1000);
-  Serial.println(report);
+  // 1. Convert raw values to standard units (g and dps)
+  float accel_x = imu.a.x * 0.061 / 1000.0;
+  float accel_y = imu.a.y * 0.061 / 1000.0;
+  float accel_z = imu.a.z * 0.061 / 1000.0;
+
+  float gyro_x = imu.g.x * 8.75 / 1000.0;
+  float gyro_y = imu.g.y * 8.75 / 1000.0;
+  float gyro_z = imu.g.z * 8.75 / 1000.0;
+
+  // 2. Print the standard report
+  // snprintf(report, sizeof(report), "A: %6f %6f %6f    G: %6f %6f %6f",
+  //   accel_x, accel_y, accel_z,
+  //   gyro_x, gyro_y, gyro_z);
+  // Serial.println(report);
+
+  // 3. Check thresholds and print alerts
+  if (abs(accel_x) > THRESHOLD_X) {
+    Serial.print("ALERT: X-axis acceleration surpassed threshold! Value: ");
+    Serial.println(accel_x);
+  }
+
+  if (abs(accel_y) > THRESHOLD_Y) {
+    Serial.print("ALERT: Y-axis acceleration surpassed threshold! Value: ");
+    Serial.println(accel_y);
+  }
+
+  if (accel_z < THRESHOLD_Z_LOW) {
+    Serial.print("ALERT: Z-axis acceleration dropped below threshold! Value: ");
+    Serial.println(accel_z);
+  }
 
   delay(100);
 }
