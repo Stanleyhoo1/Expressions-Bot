@@ -1,7 +1,14 @@
 #include <Wire.h>
 #include <Motoron.h>
 #include <LSM6.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_ILI9341.h>
+#include <SPI.h>
+#include <math.h>
 
+#define TFT_CS   10
+#define TFT_DC   9
+#define TFT_RST  8
 #define CLOSE_DISTANCE 200      // mm
 #define DARK_THRESHOLD 500      // LDR value
 #define BORED_TIME 30 * 1000    // 30 seconds
@@ -35,7 +42,7 @@ struct Motor
 
 // Motor 1 uses encoder pins D2 and D4
 Motor motor1 = {1, 2, 3, 0};
-Motor motor2 = {2, 12, 13, 0};
+Motor motor2 = {2, 12, 4, 0};
 
 // Interrupt handler for motor 1 encoder
 void handleEncA1()
@@ -261,7 +268,7 @@ enum Emotion{
     ANNOYED // Picked up or moved suddenly (IMU spike)
 };
 
-Emotion determineEmotion(unsigned long idleTime, float distance, int lightSensorValue);
+Emotion determineEmotion(unsigned long idleTime, float distance, int lightSensorValue, bool spiked);
 void printEmotion(Emotion e);
 
 int consecutiveValidReadings = 0; // distance
@@ -313,10 +320,10 @@ bool imuSpikeDetected() {
 }
 
 
-Emotion determineEmotion(unsigned long idleTime, float distance, int lightSensorValue) {
+Emotion determineEmotion(unsigned long idleTime, float distance, int lightSensorValue, bool spiked) {
   bool dark = isDark(lightSensorValue);
 
-    if (imuSpikeDetected()) {
+    if (spiked) {
         return ANNOYED;
     }
 
@@ -360,6 +367,141 @@ void printEmotion(Emotion e) {
 }
 
 // ======================================================
+// LED DISPLAY SETUP
+// ======================================================
+Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC, TFT_RST);
+
+void drawEmotion(Emotion emotion);
+
+// Helper functions
+void drawSmile(int x, int y, int r) {
+  for (int angle = 20; angle <= 160; angle += 2) {
+    float rad = angle * DEG_TO_RAD;
+    int px = x + r * cos(rad);
+    int py = y + r * sin(rad);
+    tft.fillCircle(px, py, 4, ILI9341_BLACK);
+  }
+}
+
+void drawFrown(int x, int y, int r) {
+  for (int angle = 200; angle <= 340; angle += 2) {
+    float rad = angle * DEG_TO_RAD;
+    int px = x + r * cos(rad);
+    int py = y + r * sin(rad);
+    tft.fillCircle(px, py, 4, ILI9341_BLACK);
+  }
+}
+
+void drawClosedEye(int x, int y) {
+  tft.drawLine(x - 12, y, x - 4, y - 6, ILI9341_BLACK);
+  tft.drawLine(x - 4, y - 6, x + 4, y, ILI9341_BLACK);
+  tft.drawLine(x + 4, y, x + 12, y - 6, ILI9341_BLACK);
+}
+
+void drawSmallMouth(int x, int y) {
+  tft.drawLine(x - 10, y, x + 10, y, ILI9341_BLACK);
+  tft.drawLine(x - 8, y + 1, x + 8, y + 1, ILI9341_BLACK);
+}
+
+void drawStressMark(int x, int y) {
+  tft.drawLine(x, y, x + 6, y - 8, ILI9341_BLACK);
+  tft.drawLine(x + 6, y - 8, x + 12, y, ILI9341_BLACK);
+}
+
+// Main draw function
+void drawEmotion(Emotion emotion) {
+  tft.fillScreen(ILI9341_YELLOW);
+  int cx = 160;
+  int cy = 120;
+
+  switch (emotion) {
+    case HAPPY:
+      tft.fillCircle(cx - 60, cy - 40, 20, ILI9341_BLACK);
+      tft.fillCircle(cx + 60, cy - 40, 20, ILI9341_BLACK);
+      drawSmile(cx, cy + 10, 90);
+      break;
+
+    case CURIOUS:
+      // Raised left eyebrow
+      tft.fillRect(cx - 90, cy - 75, 40, 6, ILI9341_BLACK);
+      // Normal right eyebrow
+      tft.fillRect(cx + 50, cy - 60, 40, 6, ILI9341_BLACK);
+      // Eyes with whites
+      tft.fillCircle(cx - 60, cy - 30, 18, ILI9341_WHITE);
+      tft.drawCircle(cx - 60, cy - 30, 18, ILI9341_BLACK);
+      tft.fillCircle(cx - 60, cy - 30, 8, ILI9341_BLACK);
+      tft.fillCircle(cx + 60, cy - 30, 18, ILI9341_WHITE);
+      tft.drawCircle(cx + 60, cy - 30, 18, ILI9341_BLACK);
+      tft.fillCircle(cx + 60, cy - 30, 8, ILI9341_BLACK);
+      // Tilted mouth
+      tft.drawLine(cx - 30, cy + 50, cx + 30, cy + 40, ILI9341_BLACK);
+      tft.drawLine(cx - 30, cy + 51, cx + 30, cy + 41, ILI9341_BLACK);
+      break;
+
+    case SAD:
+      tft.fillCircle(cx - 60, cy - 40, 20, ILI9341_BLACK);
+      tft.fillCircle(cx + 60, cy - 40, 20, ILI9341_BLACK);
+      drawFrown(cx, cy + 100, 90);
+      break;
+
+    case SHY:
+      // Blush cheeks
+      tft.fillCircle(cx - 85, cy + 5, 20, ILI9341_RED);
+      tft.fillCircle(cx + 85, cy + 5, 20, ILI9341_RED);
+      // Closed eyes
+      drawClosedEye(cx - 50, cy - 35);
+      drawClosedEye(cx + 50, cy - 35);
+      // Stress marks
+      drawStressMark(cx - 95, cy - 55);
+      drawStressMark(cx + 75, cy - 55);
+      // Small mouth
+      drawSmallMouth(cx, cy + 45);
+      break;
+
+    case ANNOYED:
+      // Slanted eyebrows
+      tft.drawLine(cx - 90, cy - 65, cx - 40, cy - 75, ILI9341_BLACK);
+      tft.drawLine(cx + 40, cy - 70, cx + 90, cy - 70, ILI9341_BLACK);
+      // Eyes
+      tft.fillCircle(cx - 60, cy - 30, 20, ILI9341_WHITE);
+      tft.drawCircle(cx - 60, cy - 30, 20, ILI9341_BLACK);
+      tft.fillCircle(cx + 60, cy - 30, 20, ILI9341_WHITE);
+      tft.drawCircle(cx + 60, cy - 30, 20, ILI9341_BLACK);
+      // Side-looking pupils
+      tft.fillCircle(cx - 70, cy - 30, 9, ILI9341_BLACK);
+      tft.fillCircle(cx + 50, cy - 30, 9, ILI9341_BLACK);
+      // Half-closed eyelids
+      tft.fillRect(cx - 80, cy - 45, 40, 12, ILI9341_YELLOW);
+      tft.fillRect(cx + 40, cy - 45, 40, 12, ILI9341_YELLOW);
+      // Flat mouth
+      tft.fillRect(cx - 40, cy + 55, 80, 8, ILI9341_BLACK);
+      break;
+
+    case STARTLED:
+      // Eyebrows
+      tft.fillRect(cx - 85, cy - 75, 35, 6, ILI9341_BLACK);
+      tft.fillRect(cx + 50, cy - 75, 35, 6, ILI9341_BLACK);
+      // Big wide eyes
+      tft.fillCircle(cx - 65, cy - 30, 26, ILI9341_WHITE);
+      tft.drawCircle(cx - 65, cy - 30, 26, ILI9341_BLACK);
+      tft.fillCircle(cx - 65, cy - 30, 10, ILI9341_BLACK);
+      tft.fillCircle(cx + 65, cy - 30, 26, ILI9341_WHITE);
+      tft.drawCircle(cx + 65, cy - 30, 26, ILI9341_BLACK);
+      tft.fillCircle(cx + 65, cy - 30, 10, ILI9341_BLACK);
+      // Shocked O mouth
+      tft.fillCircle(cx, cy + 55, 24, ILI9341_BLACK);
+      tft.fillCircle(cx, cy + 55, 12, ILI9341_RED);
+      break;
+
+    case TIRED:
+    case BORED:
+    case SLEEPING:
+      // TODO
+      break;
+  }
+}
+
+// ======================================================
 // SETUP
 // ======================================================
 
@@ -374,6 +516,9 @@ void setup()
   }
 
   imu.enableDefault();
+
+  tft.begin();
+  tft.setRotation(1);
 
   mc.reinitialize();
   mc.disableCrc();
@@ -417,6 +562,7 @@ void loop()
 
   // Serial.print("Light Sensor: ");
   // Serial.println(lightSensorValue);
+  bool spiked = imuSpikeDetected();
 
 
   if (medianRaw >= 0)
@@ -442,9 +588,16 @@ void loop()
   } else {
     consecutiveValidReadings++;
     if (consecutiveValidReadings >= VALID_READINGS_THRESHOLD) {
+      // Serial.println("TRUE");
       isIdle = false;
       idleStart = millis();  // only reset idle if reading is sustained
     }
+  }
+
+  if (spiked) {
+    // Serial.println("TRUE");
+    isIdle = false;
+    idleStart = millis();
   }
 
   unsigned long idleTime = isIdle ? (millis() - idleStart) : 0;
@@ -452,9 +605,10 @@ void loop()
   Serial.print("Idle time: ");
   Serial.println(idleTime/1000.0);
 
-  emotion = determineEmotion(idleTime, corrected_distance, lightSensorValue);
+  emotion = determineEmotion(idleTime, corrected_distance, lightSensorValue, spiked);
 
   printEmotion(emotion);
+  drawEmotion(emotion);
 
   if (emotion == HAPPY)
   {
