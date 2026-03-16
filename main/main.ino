@@ -264,8 +264,11 @@ enum Emotion{
 Emotion determineEmotion(unsigned long idleTime, float distance, int lightSensorValue);
 void printEmotion(Emotion e);
 
-int consecutiveValidReadings = 0;
+int consecutiveValidReadings = 0; // distance
 const int VALID_READINGS_THRESHOLD = 3; // require 3 in a row
+
+int consecutiveSpikeReadings = 0; // IMU
+const int SPIKE_THRESHOLD_COUNT = 3;
 
 Emotion emotion = HAPPY;
 
@@ -284,25 +287,29 @@ bool imuSpikeDetected() {
   float accel_y = imu.a.y * 0.061 / 1000.0;
   float accel_z = imu.a.z * 0.061 / 1000.0;
 
-  // float gyro_x = imu.g.x * 8.75 / 1000.0;
-  // float gyro_y = imu.g.y * 8.75 / 1000.0;
-  // float gyro_z = imu.g.z * 8.75 / 1000.0;
+  bool spiked = false;
 
-  // 3. Check thresholds and print alerts
   if (abs(accel_x) > THRESHOLD_X) {
-    Serial.print("ALERT: X-axis acceleration surpassed threshold! Value: ");
-    Serial.println(accel_x);
+    // Serial.print("ALERT: X-axis acceleration surpassed threshold! Value: ");
+    // Serial.println(accel_x);
+    spiked = true;
+  } else if (abs(accel_y) > THRESHOLD_Y) {
+    // Serial.print("ALERT: Y-axis acceleration surpassed threshold! Value: ");
+    // Serial.println(accel_y);
+    spiked = true;
+  } else if (accel_z < THRESHOLD_Z_LOW) {
+    // Serial.print("ALERT: Z-axis acceleration dropped below threshold! Value: ");
+    // Serial.println(accel_z);
+    spiked = true;
   }
 
-  if (abs(accel_y) > THRESHOLD_Y) {
-    Serial.print("ALERT: Y-axis acceleration surpassed threshold! Value: ");
-    Serial.println(accel_y);
+  if (spiked) {
+    consecutiveSpikeReadings++;
+  } else {
+    consecutiveSpikeReadings = 0;  // reset on any calm reading
   }
 
-  if (accel_z < THRESHOLD_Z_LOW) {
-    Serial.print("ALERT: Z-axis acceleration dropped below threshold! Value: ");
-    Serial.println(accel_z);
-  }
+  return consecutiveSpikeReadings >= SPIKE_THRESHOLD_COUNT;
 }
 
 
@@ -408,8 +415,8 @@ void loop()
 
   lightSensorValue = analogRead(lightPin);
 
-  Serial.print("Light Sensor: ");
-  Serial.println(lightSensorValue);
+  // Serial.print("Light Sensor: ");
+  // Serial.println(lightSensorValue);
 
 
   if (medianRaw >= 0)
@@ -421,7 +428,7 @@ void loop()
     // Serial.print(corrected);
     // Serial.println(" mm");
   }
-  Serial.println(corrected_distance);
+  // Serial.println(corrected_distance);
 
   // ------------------------------
   // Behavior based on emotion
