@@ -493,10 +493,48 @@ void drawEmotion(Emotion emotion) {
       tft.fillCircle(cx, cy + 55, 12, ILI9341_RED);
       break;
 
-    case TIRED:
     case BORED:
+      tft.fillCircle(cx - 60, cy - 30, 18, ILI9341_BLACK);
+      tft.fillCircle(cx + 60, cy - 30, 18, ILI9341_BLACK);
+      tft.fillRect(cx - 45, cy + 45, 90, 10, ILI9341_BLACK);
+      break;
+
+    case TIRED:
+      // Eyebrows
+      tft.drawLine(cx - 90, cy - 60, cx - 40, cy - 65, ILI9341_BLACK);
+      tft.drawLine(cx + 40, cy - 65, cx + 90, cy - 60, ILI9341_BLACK);
+      // Eyes with whites
+      tft.fillCircle(cx - 60, cy - 25, 18, ILI9341_WHITE);
+      tft.drawCircle(cx - 60, cy - 25, 18, ILI9341_BLACK);
+      tft.fillCircle(cx + 60, cy - 25, 18, ILI9341_WHITE);
+      tft.drawCircle(cx + 60, cy - 25, 18, ILI9341_BLACK);
+      // Lowered pupils
+      tft.fillCircle(cx - 60, cy - 20, 7, ILI9341_BLACK);
+      tft.fillCircle(cx + 60, cy - 20, 7, ILI9341_BLACK);
+      // Heavy eyelids
+      tft.fillRect(cx - 78, cy - 42, 36, 15, ILI9341_YELLOW);
+      tft.fillRect(cx + 42, cy - 42, 36, 15, ILI9341_YELLOW);
+      // Mouth
+      tft.fillRect(cx - 35, cy + 55, 70, 6, ILI9341_BLACK);
+      break;
+
     case SLEEPING:
-      // TODO
+      // Closed eyes
+      tft.drawLine(cx - 72, cy - 25, cx - 48, cy - 25, ILI9341_BLACK);
+      tft.drawLine(cx + 48, cy - 25, cx + 72, cy - 25, ILI9341_BLACK);
+      // Relaxed mouth
+      tft.fillCircle(cx, cy + 55, 10, ILI9341_BLACK);
+      // ZZZs
+      tft.setTextColor(ILI9341_BLUE);
+      tft.setTextSize(3);
+      tft.setCursor(cx + 70, cy - 90);
+      tft.print("Z");
+      tft.setTextSize(2);
+      tft.setCursor(cx + 100, cy - 60);
+      tft.print("Z");
+      tft.setTextSize(1);
+      tft.setCursor(cx + 115, cy - 40);
+      tft.print("Z");
       break;
   }
 }
@@ -557,6 +595,7 @@ void loop()
   // ------------------------------
   int medianRaw = readMedianDistance();
   float corrected_distance = -1;
+  Emotion last_emotion = emotion;
 
   lightSensorValue = analogRead(lightPin);
 
@@ -608,7 +647,9 @@ void loop()
   emotion = determineEmotion(idleTime, corrected_distance, lightSensorValue, spiked);
 
   printEmotion(emotion);
-  drawEmotion(emotion);
+  if (emotion != last_emotion){
+    drawEmotion(emotion);
+  }
 
   if (emotion == HAPPY)
   {
