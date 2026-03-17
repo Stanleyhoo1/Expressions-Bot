@@ -68,13 +68,13 @@ const unsigned char* const sound_table[] PROGMEM = {
 
 const unsigned int sound_lengths[] PROGMEM = {
   sizeof(he_he_he_ha_clash_royale_deep_fried),
-  sizeof(mimimi_clash_royale),
   sizeof(minecraft_villager_sound_effect),
   sizeof(cute_uwu),
   sizeof(VOXScrm_Wilhelm_scream_ID_0477__BigSoundBank_com),
   sizeof(clash_royale_yawning_emote),
   sizeof(man_snoring_meme_ctrllNn_1_),
   sizeof(movie_1),
+  sizeof(mimimi_clash_royale),
   sizeof(new2009pro_minecraft_villager_sound_15065)
 };
 
@@ -315,7 +315,9 @@ float calibrateDistance(float raw)
 // LIGHT SENSOR SETUP
 // ======================================================
 int lightSensorValue = 0; // variable for raw sensor readings
-const int lightPin = A0;
+const int lightPin = A1;
+const int buttonPin = 6;
+const int ledPin = 7;
 
 // ======================================================
 // EMOTION LOGIC
@@ -646,6 +648,8 @@ void setup()
   attachInterrupt(digitalPinToInterrupt(motor2.encA), handleEncA2, RISING);
 
   pinMode(sensorPin, INPUT);
+  pinMode(ledPin, OUTPUT);
+  pinMode(buttonPin, INPUT_PULLUP);
 
   for (int i = 0; i < AVG_SAMPLES; i++)
     avgBuffer[i] = 0;
@@ -714,15 +718,11 @@ void loop()
   emotion = determineEmotion(idleTime, corrected_distance, lightSensorValue, spiked);
 
   printEmotion(emotion);
-<<<<<<< HEAD
+
   if (emotion != last_emotion){
     drawEmotion(emotion);
+    playSound(emotion);
   }
-=======
-  drawEmotion(emotion);
-  playSound(emotion);
->>>>>>> 450eb2d5310a5115039830b688cdbd164fc019a9
-
   if (emotion == HAPPY)
   {
     bobMotor(motor2);
@@ -747,6 +747,14 @@ void loop()
       returnToNeutral(motor1, motor1Returning);
     else
       mc.setSpeed(motor1.motorID, 0);
+  }
+
+  if (digitalRead(buttonPin) == LOW) {
+    digitalWrite(ledPin, HIGH);
+    
+    // A tiny delay to handle physical "bouncing" of the metal button contacts
+  } else {
+    digitalWrite(ledPin, LOW);
   }
 
   delay(50);
