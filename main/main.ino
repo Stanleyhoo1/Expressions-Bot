@@ -32,7 +32,7 @@ MotoronI2C mc(0x11);
 // MOTOR + ENCODER SETUP
 // ======================================================
 
-float happyTarget = 25.0;
+float happyTarget = 10.0;
 int happyDirection = 1;   // 1 means heading toward +45, -1 means heading toward -45
 bool motor1Returning = false;
 bool motor2Returning = false;
@@ -81,32 +81,28 @@ const unsigned int sound_lengths[] PROGMEM = {
 const int TOTAL_SOUNDS = sizeof(sound_table) / sizeof(sound_table[0]);
 
 void playSound(int soundIndex) {
-  // Safety check: Make sure the index actually exists
   if (soundIndex < 0 || soundIndex >= TOTAL_SOUNDS) {
     Serial.println("Error: Sound index out of range!");
     return;
   }
 
-  // Fetch pointer and length from PROGMEM
   const unsigned char* current_sound = (const unsigned char*) pgm_read_ptr(&sound_table[soundIndex]);
   unsigned int current_length = pgm_read_word(&sound_lengths[soundIndex]);
 
-  // Print the results
-  // Serial.print("Ready to play sound #");
-  // Serial.print(soundIndex);
-  // Serial.print(" | Size: ");
-  // Serial.print(current_length);
-  // Serial.println(" bytes");
+  float gain = 10.0;  // ← adjust this. 1.0 = original, 2.0 = double, 3.0 = triple
 
-  // FIX: Don't use sizeof() here! We already fetched the exact length from PROGMEM above.
-  unsigned int totalSamples = current_length; 
-  
-  for (long i = 0; i < totalSamples; i++) {
-    // FIX: Use pgm_read_byte to safely extract the audio data from Flash memory
-    byte audioSample = pgm_read_byte(&current_sound[i]);
-    
-    analogWrite(A0, audioSample); // Send the audio wave to pin A0
-    delayMicroseconds(125);       // Wait exactly the right amount of time for 8000Hz
+  for (long i = 0; i < current_length; i++) {
+    int sample = pgm_read_byte(&current_sound[i]);
+
+    // Amplify around midpoint (128)
+    int amplified = 128 + (int)((sample - 128) * gain);
+
+    // Clamp to 0-255 to avoid wrap-around distortion
+    if (amplified > 255) amplified = 255;
+    if (amplified < 0)   amplified = 0;
+
+    analogWrite(A0, amplified);
+    delayMicroseconds(125);
   }
 }
 
@@ -199,10 +195,10 @@ void bobMotor(Motor &m)
 
   float angleDeg = (count * 360.0) / countsPerRevolution;
 
-  if (angleDeg >= 25.0)
-    happyTarget = -25.0;
-  else if (angleDeg <= -25.0)
-    happyTarget = 25.0;
+  if (angleDeg >= 10.0)
+    happyTarget = -10.0;
+  else if (angleDeg <= -10.0)
+    happyTarget = 10.0;
 
   float error = happyTarget - angleDeg;
 
@@ -319,6 +315,13 @@ const int lightPin = A1;
 const int buttonPin = 6;
 const int ledPin = 7;
 
+// Replace your button variables with these three:
+bool isOn = true;
+bool lastRawButton = HIGH;      // tracks raw pin changes for debounce timer
+bool lastStableButton = HIGH;   // tracks confirmed stable state for edge detection
+unsigned long lastDebounceTime = 0;
+const unsigned long DEBOUNCE_DELAY = 50;
+
 // ======================================================
 // EMOTION LOGIC
 // ======================================================
@@ -364,6 +367,10 @@ bool imuSpikeDetected() {
   float accel_z = imu.a.z * 0.061 / 1000.0;
 
   bool spiked = false;
+
+  Serial.println(imu.a.x);
+  Serial.println(imu.a.y);
+  Serial.println(imu.a.z);
 
   if (abs(accel_x) > THRESHOLD_X) {
     // Serial.print("ALERT: X-axis acceleration surpassed threshold! Value: ");
@@ -661,101 +668,132 @@ void setup()
 
 void loop()
 {
-  // ------------------------------
-  // Distance sensor reading
-  // ------------------------------
-  int medianRaw = readMedianDistance();
-  float corrected_distance = -1;
-  Emotion last_emotion = emotion;
+  bool buttonReading = digitalRead(buttonPin);
 
-  lightSensorValue = analogRead(lightPin);
-
-  // Serial.print("Light Sensor: ");
-  // Serial.println(lightSensorValue);
-  bool spiked = imuSpikeDetected();
-
-
-  if (medianRaw >= 0)
-  {
-    int smoothRaw = movingAverage(medianRaw);
-    corrected_distance = calibrateDistance((float)smoothRaw);
-
-    // Serial.print("Distance: ");
-    // Serial.print(corrected);
-    // Serial.println(" mm");
+  // If raw reading changed, restart debounce timer
+  if (buttonReading != lastRawButton) {
+      lastDebounceTime = millis();
+      lastRawButton = buttonReading;
   }
-  // Serial.println(corrected_distance);
 
-  // ------------------------------
-  // Behavior based on emotion
-  // ------------------------------
-  if (corrected_distance == -1) {
-    consecutiveValidReadings = 0;  // reset streak on bad reading
-    if (!isIdle) {
-      idleStart = millis();
-      isIdle = true;
+  // Only act once reading has been stable for DEBOUNCE_DELAY
+  if ((millis() - lastDebounceTime) > DEBOUNCE_DELAY) {
+      if (buttonReading != lastStableButton) {
+          lastStableButton = buttonReading;
+
+          if (lastStableButton == LOW) {  // falling edge = press confirmed
+              isOn = !isOn;
+              if (!isOn) {
+                  mc.setSpeed(motor1.motorID, 0);
+                  mc.setSpeed(motor2.motorID, 0);
+                  motor1Returning = false;
+                  motor2Returning = false;
+                  tft.fillScreen(ILI9341_BLACK);
+              } else {
+                  drawEmotion(emotion);
+              }
+          }
+      }
+  }
+
+  digitalWrite(ledPin, isOn ? HIGH : LOW);
+
+  if (isOn){
+    // ------------------------------
+    // Distance sensor reading
+    // ------------------------------
+    int medianRaw = readMedianDistance();
+    float corrected_distance = -1;
+    Emotion last_emotion = emotion;
+
+    lightSensorValue = analogRead(lightPin);
+
+    Serial.print("Light Sensor: ");
+    Serial.println(lightSensorValue);
+    bool spiked = imuSpikeDetected();
+
+
+    if (medianRaw >= 0)
+    {
+      int smoothRaw = movingAverage(medianRaw);
+      corrected_distance = calibrateDistance((float)smoothRaw);
+
+      // Serial.print("Distance: ");
+      // Serial.print(corrected);
+      // Serial.println(" mm");
     }
-  } else {
-    consecutiveValidReadings++;
-    if (consecutiveValidReadings >= VALID_READINGS_THRESHOLD) {
+    // Serial.println(corrected_distance);
+
+    // ------------------------------
+    // Behavior based on emotion
+    // ------------------------------
+    if (corrected_distance == -1) {
+      consecutiveValidReadings = 0;  // reset streak on bad reading
+      if (!isIdle) {
+        idleStart = millis();
+        isIdle = true;
+      }
+    } else {
+      consecutiveValidReadings++;
+      if (consecutiveValidReadings >= VALID_READINGS_THRESHOLD) {
+        // Serial.println("TRUE");
+        isIdle = false;
+        idleStart = millis();  // only reset idle if reading is sustained
+      }
+    }
+
+    if (spiked) {
       // Serial.println("TRUE");
       isIdle = false;
-      idleStart = millis();  // only reset idle if reading is sustained
+      idleStart = millis();
     }
-  }
 
-  if (spiked) {
-    // Serial.println("TRUE");
-    isIdle = false;
-    idleStart = millis();
-  }
+    unsigned long idleTime = isIdle ? (millis() - idleStart) : 0;
 
-  unsigned long idleTime = isIdle ? (millis() - idleStart) : 0;
+    Serial.print("Idle time: ");
+    Serial.println(idleTime/1000.0);
 
-  Serial.print("Idle time: ");
-  Serial.println(idleTime/1000.0);
+    Serial.print("M1: "); Serial.print(motor1.count);
+    Serial.print("  M2: "); Serial.println(motor2.count);
 
-  emotion = determineEmotion(idleTime, corrected_distance, lightSensorValue, spiked);
+    // Serial.println(lightSensorValue);
 
-  printEmotion(emotion);
+    emotion = determineEmotion(idleTime, corrected_distance, lightSensorValue, spiked);
 
-  if (emotion != last_emotion){
-    drawEmotion(emotion);
-    playSound(emotion);
-  }
-  if (emotion == HAPPY)
-  {
-    bobMotor(motor2);
-    motor2Returning = true;   // remember that we left center
-  }
-  else
-  {
-    if (motor2Returning)
-      returnToNeutral(motor2, motor2Returning);
+    printEmotion(emotion);
+
+    if (emotion != last_emotion){
+      drawEmotion(emotion);
+      // playSound(emotion);
+    }
+    if (emotion == HAPPY)
+    {
+      bobMotor(motor2);
+      motor2Returning = true;   // remember that we left center
+    }
     else
-      mc.setSpeed(motor2.motorID, 0);
-  }
+    {
+      if (motor2Returning)
+        returnToNeutral(motor2, motor2Returning);
+      else
+        mc.setSpeed(motor2.motorID, 0);
+    }
 
-  if (emotion == STARTLED)
-  {
-    bobMotor(motor1);
-    motor1Returning = true;   // remember that we left center
-  }
-  else
-  {
-    if (motor1Returning)
-      returnToNeutral(motor1, motor1Returning);
+    // Serial.println(motor2.count);
+
+    if (emotion == STARTLED)
+    {
+      bobMotor(motor1);
+      motor1Returning = true;   // remember that we left center
+    }
     else
-      mc.setSpeed(motor1.motorID, 0);
-  }
+    {
+      if (motor1Returning)
+        returnToNeutral(motor1, motor1Returning);
+      else
+        mc.setSpeed(motor1.motorID, 0);
+    }
 
-  if (digitalRead(buttonPin) == LOW) {
-    digitalWrite(ledPin, HIGH);
-    
-    // A tiny delay to handle physical "bouncing" of the metal button contacts
-  } else {
-    digitalWrite(ledPin, LOW);
+    delay(50);
   }
-
-  delay(50);
 }
