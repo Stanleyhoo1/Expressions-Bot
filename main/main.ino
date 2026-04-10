@@ -39,6 +39,8 @@ bool motor2Returning = false;
 const float THRESHOLD_X = 0.3;
 const float THRESHOLD_Y = 0.3;
 const float THRESHOLD_Z_LOW = 0.75;
+const float THRESHOLD_HIGH = 1.2;
+const float THRESHOLD_LOW = 0.8;
 
 const long countsPerRevolution = 144;   // measured experimentally
 
@@ -349,6 +351,8 @@ const int VALID_READINGS_THRESHOLD = 3; // require 3 in a row
 int consecutiveSpikeReadings = 0; // IMU
 const int SPIKE_THRESHOLD_COUNT = 3;
 
+const float GYRO_THRESHOLD = 20.0; // deg/s
+
 Emotion emotion = HAPPY;
 
 bool isDark(int lightSensorValue){
@@ -362,34 +366,58 @@ bool isDark(int lightSensorValue){
 bool imuSpikeDetected() {
   imu.read();
 
+  // Accelerometer (g)
   float accel_x = imu.a.x * 0.061 / 1000.0;
   float accel_y = imu.a.y * 0.061 / 1000.0;
   float accel_z = imu.a.z * 0.061 / 1000.0;
 
+  // Gyroscope (deg/s)
+  float gyro_x = imu.g.x * 4.375 / 1000.0;
+  float gyro_y = imu.g.y * 4.375 / 1000.0;
+  float gyro_z = imu.g.z * 4.375 / 1000.0;
+
   bool spiked = false;
 
-  Serial.println(imu.a.x);
-  Serial.println(imu.a.y);
-  Serial.println(imu.a.z);
+  // Debug prints
+  Serial.println(accel_x);
+  Serial.println(accel_y);
+  Serial.println(accel_z);
 
-  if (abs(accel_x) > THRESHOLD_X) {
-    // Serial.print("ALERT: X-axis acceleration surpassed threshold! Value: ");
-    // Serial.println(accel_x);
-    spiked = true;
-  } else if (abs(accel_y) > THRESHOLD_Y) {
-    // Serial.print("ALERT: Y-axis acceleration surpassed threshold! Value: ");
-    // Serial.println(accel_y);
-    spiked = true;
-  } else if (accel_z < THRESHOLD_Z_LOW) {
-    // Serial.print("ALERT: Z-axis acceleration dropped below threshold! Value: ");
-    // Serial.println(accel_z);
+  // Acceleration magnitude
+  float total_accel = sqrt(
+    accel_x * accel_x +
+    accel_y * accel_y +
+    accel_z * accel_z
+  );
+
+  // Gyro magnitude
+  float total_gyro = sqrt(
+    gyro_x * gyro_x +
+    gyro_y * gyro_y +
+    gyro_z * gyro_z
+  );
+
+  // -------------------------
+  // Acceleration-based spike
+  // -------------------------
+  if (total_accel > THRESHOLD_HIGH || total_accel < THRESHOLD_LOW) {
     spiked = true;
   }
 
+  // -------------------------
+  // NEW: Gyroscope check
+  // -------------------------
+  if (total_gyro > GYRO_THRESHOLD) {
+    spiked = true;
+  }
+
+  // -------------------------
+  // Consecutive filtering
+  // -------------------------
   if (spiked) {
     consecutiveSpikeReadings++;
   } else {
-    consecutiveSpikeReadings = 0;  // reset on any calm reading
+    consecutiveSpikeReadings = 0;
   }
 
   return consecutiveSpikeReadings >= SPIKE_THRESHOLD_COUNT;
